@@ -1,7 +1,5 @@
 use std::error::Error;
 
-use clap::Parser;
-use futures_util::StreamExt;
 use airman::{
     app::{Application, Intent},
     backend::{monotonic_ms, Secret},
@@ -14,6 +12,8 @@ use airman::{
     terminal::{self, TerminalSession},
     tui,
 };
+use clap::Parser;
+use futures_util::StreamExt;
 use tokio::time::{self, Duration, MissedTickBehavior};
 
 #[tokio::main]
