@@ -1,0 +1,45 @@
+[package]
+name = "airman"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, robust Linux terminal interface (TUI) for Wi-Fi and Bluetooth"
+license = "MIT"
+authors = ["Ankit Saini <nnkitsaini@gmail.com>"]
+repository = "https://github.com/nkitsaini/airman"
+homepage = "https://github.com/nkitsaini/airman"
+readme = "README.md"
+keywords = ["wifi", "bluetooth", "tui", "networkmanager", "iwd"]
+categories = ["command-line-utilities", "network-programming"]
+
+[features]
+default = []
+simulator = []
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+ratatui = "0.26"
+crossterm = { version = "0.27", features = ["event-stream"] }
+zbus = { version = "4", features = ["tokio"] }
+zvariant = "4"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zeroize = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+qrcode = { version = "0.14", default-features = false }
+nix = { version = "0.29", features = ["net", "socket"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+proptest = "1"
