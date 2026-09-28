@@ -408,7 +408,7 @@ impl Runtime {
         &self,
         id: &WifiNetworkId,
         state: &AppState,
-    ) -> Result<Secret, UserFacingError> {
+    ) -> Result<Secret, Box<UserFacingError>> {
         let target = EntityId::Wifi(id.clone());
         let backend_kind = backend_for_target(&target, state)
             .ok_or_else(|| unavailable_error(BackendKind::NetworkManager, target.clone()))?;
@@ -419,8 +419,8 @@ impl Runtime {
         match tokio::time::timeout(std::time::Duration::from_secs(5), backend.wifi_secret(id)).await
         {
             Ok(Ok(secret)) => Ok(secret),
-            Ok(Err(error)) => Err(error.into_user_error(backend_kind, Some(target))),
-            Err(_) => Err(UserFacingError {
+            Ok(Err(error)) => Err(Box::new(error.into_user_error(backend_kind, Some(target)))),
+            Err(_) => Err(Box::new(UserFacingError {
                 category: ErrorCategory::Timeout,
                 summary: "Reading the saved Wi-Fi password timed out".into(),
                 detail: "The Wi-Fi service did not answer the secret request within five seconds"
@@ -430,7 +430,7 @@ impl Runtime {
                 backend: Some(backend_kind),
                 target: Some(target),
                 raw_code: Some("secret-read-timeout".into()),
-            }),
+            })),
         }
     }
 

@@ -245,7 +245,7 @@ async fn handle_intent(
                         );
                     }
                 }
-                Err(error) => application.report_user_error(error, now_ms),
+                Err(error) => application.report_user_error(*error, now_ms),
             }
             None
         }
