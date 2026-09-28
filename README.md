@@ -87,6 +87,14 @@ BlueZ's RSSI property is optional. A remembered device without RSSI is shown as
 `range unknown` rather than incorrectly labelled out of range; starting
 discovery gives BlueZ an opportunity to update it.
 
+The Bluetooth list hides redundant auxiliary BLE advertisements when a
+recognized manufacturer payload references an available audio device on the
+same adapter. Actions still use the audio device's address.
+This is a narrow compatibility rule for the observed advertisement format;
+matching names alone never groups devices. Unknown formats and auxiliary devices
+that are paired, trusted, blocked, connected, or have an active operation remain
+visible. Both identities remain in BlueZ and in airman's internal state.
+
 ## Backends
 
 `--backend auto` selects the highest-level daemon that exposes a usable Wi-Fi

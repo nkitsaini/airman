@@ -225,6 +225,9 @@ pub struct IpAddressInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BluetoothDevice {
     pub id: BluetoothDeviceId,
+    /// Audio identity explicitly referenced by a recognized auxiliary advertisement.
+    /// Both BlueZ objects remain in state; only the redundant list row is hidden.
+    pub audio_device: Option<BluetoothDeviceId>,
     pub name: String,
     pub state: ConnectionState,
     pub paired: bool,

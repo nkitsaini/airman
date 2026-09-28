@@ -1,6 +1,6 @@
 [package]
 name = "airman"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A fast, robust Linux terminal interface (TUI) for Wi-Fi and Bluetooth"
 license = "MIT"

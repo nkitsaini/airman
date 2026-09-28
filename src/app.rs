@@ -599,7 +599,29 @@ impl Application {
             .iter()
             .filter(|id| {
                 let device = &self.reducer.state.bluetooth.devices[*id];
-                (self.show_out_of_range || device.presence != crate::domain::Presence::OutOfRange)
+                let auxiliary = !device.paired
+                    && !device.trusted
+                    && !device.blocked
+                    && device.state == ConnectionState::Disconnected
+                    && self
+                        .reducer
+                        .state
+                        .active_operation(&EntityId::Bluetooth((*id).clone()))
+                        .is_none()
+                    && device.audio_device.as_ref().is_some_and(|audio_id| {
+                        self.reducer
+                            .state
+                            .bluetooth
+                            .devices
+                            .get(audio_id)
+                            .is_some_and(|audio| {
+                                self.show_out_of_range
+                                    || audio.presence != crate::domain::Presence::OutOfRange
+                            })
+                    });
+                !auxiliary
+                    && (self.show_out_of_range
+                        || device.presence != crate::domain::Presence::OutOfRange)
                     && (fuzzy_match(&device.name, &self.search)
                         || fuzzy_match(&id.address.0, &self.search))
             })
@@ -1638,6 +1660,7 @@ mod tests {
                 }],
                 devices: vec![BluetoothDevice {
                     id,
+                    audio_device: None,
                     name: "Headphones".into(),
                     state: ConnectionState::Disconnected,
                     paired,
@@ -1652,6 +1675,87 @@ mod tests {
             }),
         }));
         app
+    }
+
+    #[test]
+    fn auxiliary_bluetooth_identity_hides_only_when_its_audio_device_is_available() {
+        let mut app = application_with_bluetooth(true, true, false);
+        let audio_id = app.reducer.state.bluetooth.order[0].clone();
+        let mut auxiliary = app.reducer.state.bluetooth.devices[&audio_id].clone();
+        auxiliary.id.address = HardwareAddress("01:23:45:67:89:AC".into());
+        auxiliary.paired = false;
+        auxiliary.trusted = false;
+        let auxiliary_id = auxiliary.id.clone();
+        app.reducer.state.bluetooth.order.push(auxiliary_id.clone());
+        app.reducer
+            .state
+            .bluetooth
+            .devices
+            .insert(auxiliary_id.clone(), auxiliary);
+
+        // Identical names alone never hide a device.
+        assert_eq!(app.visible_bluetooth_ids().len(), 2);
+        app.reducer
+            .state
+            .bluetooth
+            .devices
+            .get_mut(&auxiliary_id)
+            .unwrap()
+            .audio_device = Some(audio_id.clone());
+        assert_eq!(app.visible_bluetooth_ids(), vec![audio_id.clone()]);
+        assert_eq!(app.reducer.state.bluetooth.devices.len(), 2);
+
+        // A selection that becomes hidden must move to an actionable row.
+        app.reducer.state.bluetooth.selected = Some(auxiliary_id.clone());
+        app.ensure_visible_selection();
+        assert_eq!(app.reducer.state.bluetooth.selected, Some(audio_id.clone()));
+        assert!(
+            matches!(app.handle_terminal_event(key(KeyCode::Enter)), Some(Intent::SetConnection { target: EntityId::Bluetooth(id), .. }) if id == audio_id)
+        );
+
+        for protected in 0..4 {
+            let device = app
+                .reducer
+                .state
+                .bluetooth
+                .devices
+                .get_mut(&auxiliary_id)
+                .unwrap();
+            device.paired = protected == 0;
+            device.trusted = protected == 1;
+            device.blocked = protected == 2;
+            device.state = if protected == 3 {
+                ConnectionState::Connected
+            } else {
+                ConnectionState::Disconnected
+            };
+            assert_eq!(app.visible_bluetooth_ids().len(), 2);
+        }
+        app.reducer
+            .state
+            .bluetooth
+            .devices
+            .get_mut(&auxiliary_id)
+            .unwrap()
+            .state = ConnectionState::Disconnected;
+
+        app.reducer
+            .state
+            .bluetooth
+            .devices
+            .get_mut(&audio_id)
+            .unwrap()
+            .presence = Presence::OutOfRange;
+        assert_eq!(app.visible_bluetooth_ids(), vec![auxiliary_id.clone()]);
+        app.show_out_of_range = true;
+        assert_eq!(app.visible_bluetooth_ids(), vec![audio_id.clone()]);
+        app.reducer.state.bluetooth.devices.remove(&audio_id);
+        app.reducer
+            .state
+            .bluetooth
+            .order
+            .retain(|id| id != &audio_id);
+        assert_eq!(app.visible_bluetooth_ids(), vec![auxiliary_id]);
     }
 
     #[test]

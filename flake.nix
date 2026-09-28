@@ -37,7 +37,7 @@
       packages = forAllSystems (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
           pname = "airman";
-          version = "0.1.0";
+          version = "0.1.1";
           # Keep local build artifacts and logs out of the Nix source closure.
           src = pkgs.lib.fileset.toSource {
             root = ./.;

@@ -1,4 +1,6 @@
-use std::{collections::BTreeMap, collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, collections::BTreeSet, collections::HashMap, sync::Arc, time::Duration,
+};
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
@@ -80,6 +82,7 @@ impl BluezBackend {
     async fn snapshot_inner(&self) -> Result<BackendEvent, BackendFailure> {
         let objects = self.managed_objects().await?;
         let now = super::dbus::monotonic_ms();
+        let audio_devices = compatible_audio_devices(&objects);
         let mut adapters = Vec::new();
         let mut adapter_paths = HashMap::<AdapterId, (OwnedObjectPath, bool)>::new();
 
@@ -132,11 +135,18 @@ impl BluezBackend {
                 .get(BATTERY_INTERFACE)
                 .and_then(|battery| u8_property(battery, "Percentage"));
             let presence = bluez_presence(connected, rssi, discovering);
+            let audio_device = advertised_audio_address(properties)
+                .map(|address| BluetoothDeviceId {
+                    adapter: adapter.clone(),
+                    address: HardwareAddress(address),
+                })
+                .filter(|id| id.address.0 != address && audio_devices.contains(id));
             devices.push(BluetoothDevice {
                 id: BluetoothDeviceId {
                     adapter,
                     address: HardwareAddress(address),
                 },
+                audio_device,
                 name,
                 state: if connected {
                     ConnectionState::Connected
@@ -370,6 +380,61 @@ fn bluetooth_capabilities() -> CapabilityMap {
     .collect()
 }
 
+fn compatible_audio_devices(objects: &ManagedObjects) -> BTreeSet<BluetoothDeviceId> {
+    objects
+        .iter()
+        .filter_map(|(path, interfaces)| {
+            let properties = interfaces.get(DEVICE_INTERFACE)?;
+            let uuids = Vec::<String>::try_from(properties.get("UUIDs")?.try_clone().ok()?).ok()?;
+            // Require both an audio sink and the matching vendor control service.
+            if ![
+                "0000110b-0000-1000-8000-00805f9b34fb",
+                "0000079a-d102-11e1-9b23-00025b00a5a5",
+            ]
+            .iter()
+            .all(|expected| uuids.iter().any(|uuid| uuid.eq_ignore_ascii_case(expected)))
+            {
+                return None;
+            }
+            let adapter = path_property(properties, "Adapter")?;
+            Some(BluetoothDeviceId {
+                adapter: AdapterId(adapter.rsplit('/').next()?.to_owned()),
+                address: HardwareAddress(
+                    string_property(properties, "Address")
+                        .unwrap_or_else(|| address_from_path(path.as_str()))
+                        .to_uppercase(),
+                ),
+            })
+        })
+        .collect()
+}
+
+fn advertised_audio_address(properties: &Properties) -> Option<String> {
+    let data =
+        HashMap::<u16, OwnedValue>::try_from(properties.get("ManufacturerData")?.try_clone().ok()?)
+            .ok()?;
+    let payload = Vec::<u8>::try_from(data.get(&0xa408)?.try_clone().ok()?).ok()?;
+    // Recognized manufacturer layout: a 19-byte payload with this
+    // eight-byte prefix, followed by the classic address in little-endian
+    // order. This is a deliberately narrow compatibility rule, not a generic
+    // protocol decoder. Leave other formats visible until validated.
+    if payload.len() != 19 || !payload.starts_with(&[0x12, 0x14, 0x05, 0x3f, 0, 3, 0x98, 1]) {
+        return None;
+    }
+    let address = &payload[8..14];
+    if address.iter().all(|byte| *byte == 0) || address.iter().all(|byte| *byte == 0xff) {
+        return None;
+    }
+    Some(
+        address
+            .iter()
+            .rev()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
+}
+
 /// Device identity comes from the `Address` property. The object path is the
 /// fallback, and it has to produce the identical address: a device listed under
 /// two spellings of the same address would appear twice, and the duplicate
@@ -450,6 +515,111 @@ fn unsupported() -> BackendFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const AUXILIARY_ADVERTISEMENT: [u8; 19] = [
+        0x12, 0x14, 0x05, 0x3f, 0, 3, 0x98, 1, 0xbc, 0xa7, 0x9c, 0x85, 0x0e, 0x88, 1, 0xb5, 0, 0, 2,
+    ];
+
+    fn advertisement(company: u16, payload: &[u8]) -> Properties {
+        HashMap::from([(
+            "ManufacturerData".into(),
+            Value::from(HashMap::from([(company, Value::from(payload.to_vec()))]))
+                .try_to_owned()
+                .unwrap(),
+        )])
+    }
+
+    #[test]
+    fn auxiliary_advertisement_links_the_exact_audio_address() {
+        assert_eq!(
+            advertised_audio_address(&advertisement(0xa408, &AUXILIARY_ADVERTISEMENT)),
+            Some("88:0E:85:9C:A7:BC".into())
+        );
+        // Another headset of the same model must link to its own address.
+        let mut other = AUXILIARY_ADVERTISEMENT;
+        other[8] = 0xbd;
+        assert_eq!(
+            advertised_audio_address(&advertisement(0xa408, &other)),
+            Some("88:0E:85:9C:A7:BD".into())
+        );
+    }
+
+    #[test]
+    fn unknown_or_malformed_advertisements_do_not_create_links() {
+        assert_eq!(advertised_audio_address(&Properties::new()), None);
+        assert_eq!(
+            advertised_audio_address(&advertisement(0x004c, &AUXILIARY_ADVERTISEMENT)),
+            None
+        );
+        for length in 0..AUXILIARY_ADVERTISEMENT.len() {
+            assert_eq!(
+                advertised_audio_address(&advertisement(
+                    0xa408,
+                    &AUXILIARY_ADVERTISEMENT[..length]
+                )),
+                None
+            );
+        }
+        let mut unknown = AUXILIARY_ADVERTISEMENT;
+        unknown[0] = 0x13;
+        assert_eq!(
+            advertised_audio_address(&advertisement(0xa408, &unknown)),
+            None
+        );
+        let mut extended = AUXILIARY_ADVERTISEMENT.to_vec();
+        extended.push(0);
+        assert_eq!(
+            advertised_audio_address(&advertisement(0xa408, &extended)),
+            None
+        );
+        for invalid in [0, 0xff] {
+            let mut payload = AUXILIARY_ADVERTISEMENT;
+            payload[8..14].fill(invalid);
+            assert_eq!(
+                advertised_audio_address(&advertisement(0xa408, &payload)),
+                None
+            );
+        }
+        let wrong_type = HashMap::from([("ManufacturerData".into(), OwnedValue::from(42u16))]);
+        assert_eq!(advertised_audio_address(&wrong_type), None);
+    }
+
+    #[test]
+    fn audio_counterparts_require_vendor_and_audio_services_and_keep_adapter_identity() {
+        let audio = "0000110b-0000-1000-8000-00805f9b34fb";
+        let vendor = "0000079a-d102-11e1-9b23-00025b00a5a5";
+        for (services, recognized) in [
+            (vec![], false),
+            (vec![audio], false),
+            (vec![vendor], false),
+            (vec![audio, vendor], true),
+        ] {
+            let properties = HashMap::from([
+                (
+                    "Adapter".into(),
+                    Value::from(OwnedObjectPath::try_from("/org/bluez/hci1").unwrap())
+                        .try_to_owned()
+                        .unwrap(),
+                ),
+                (
+                    "UUIDs".into(),
+                    Value::from(services).try_to_owned().unwrap(),
+                ),
+            ]);
+            let objects = HashMap::from([(
+                OwnedObjectPath::try_from("/org/bluez/hci1/dev_88_0E_85_9C_A7_BC").unwrap(),
+                HashMap::from([(DEVICE_INTERFACE.into(), properties)]),
+            )]);
+            let ids = compatible_audio_devices(&objects);
+            assert_eq!(ids.len(), usize::from(recognized));
+            if recognized {
+                assert!(ids.contains(&BluetoothDeviceId {
+                    adapter: AdapterId("hci1".into()),
+                    address: HardwareAddress("88:0E:85:9C:A7:BC".into()),
+                }));
+            }
+        }
+    }
 
     #[test]
     fn bluetooth_capabilities_include_pairing_and_trust() {

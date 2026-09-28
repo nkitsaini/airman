@@ -802,6 +802,7 @@ mod tests {
     fn bluetooth_device(address: &str, paired: bool, now: u64) -> BluetoothDevice {
         BluetoothDevice {
             id: bluetooth_id(address),
+            audio_device: None,
             name: format!("Keyboard {address}"),
             state: ConnectionState::Disconnected,
             paired,
@@ -1300,6 +1301,7 @@ mod tests {
                 }],
                 devices: vec![BluetoothDevice {
                     id: id.clone(),
+                    audio_device: None,
                     name: "Keyboard".into(),
                     state: ConnectionState::Disconnected,
                     paired: true,
